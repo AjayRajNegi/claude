@@ -1,5 +1,11 @@
-from typing import Any
+from typing import Any, AsyncGenerator
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
+import os
+
+from client.response import EventType, StreamEvent, TextDelta, TokenUsage
+
+load_dotenv()
 
 class LLMClient:
     def __init__(self) -> None: 
@@ -7,8 +13,9 @@ class LLMClient:
 
     def get_client(self)->AsyncOpenAI:
         if self._client is None:
+            OPENAI_API_KEY=os.getenv('OPENAI_API_KEY')
             self._client = AsyncOpenAI(
-                api_key="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", 
+                api_key=OPENAI_API_KEY, 
                 base_url="https://openrouter.ai/api/v1"
             )
         return self._client
@@ -18,7 +25,7 @@ class LLMClient:
             await self._client.close()
             self._client = None
 
-    async def chat_completion(self, messages: list[dict[str, Any]], stream:bool=True):
+    async def chat_completion(self, messages: list[dict[str, Any]], stream:bool=True)->AsyncGenerator[StreamEvent | None]:
 
         client = self.get_client()
         kwargs={
@@ -29,11 +36,34 @@ class LLMClient:
         if stream:
             await self._stream_response(client, kwargs)
         else:
-            await self._non_stream_response(client, kwargs)
+            event = await self._non_stream_response(client, kwargs)
+            yield event
+        return 
 
-    async def _stream_response(self):
+    async def _stream_response(self, client: AsyncOpenAI, kwargs: dict[str, Any]):
         pass
 
-    async def _non_stream_response(self, client:AsyncOpenAI, kwargs: dict[str, Any]):
+    async def _non_stream_response(self, client:AsyncOpenAI, kwargs: dict[str, Any])->StreamEvent:
         response = await client.chat.completions.create(**kwargs)
-        print(response)
+        choice = response.choices[0];
+        message = choice.message;
+
+        text_delta = None;
+        if message.content:
+            text_delta = TextDelta(content = message.content)
+        
+        usage = None;
+        if response.usage:
+            usage = TokenUsage(
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+                cached_tokens=response.usage.prompt_tokens_details.cached_tokens
+            )
+
+        return StreamEvent(
+            type=EventType.MESSAGE_COMPLETE,
+            text_delta=text_delta,
+            finish_reason=choice.finish_reason,
+            usage=usage
+        )
