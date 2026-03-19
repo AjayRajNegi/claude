@@ -26,7 +26,6 @@ class LLMClient:
             self._client = None
 
     async def chat_completion(self, messages: list[dict[str, Any]], stream:bool=True)->AsyncGenerator[StreamEvent | None]:
-
         client = self.get_client()
         kwargs={
             "model":"nvidia/nemotron-3-nano-30b-a3b:free",
@@ -34,19 +33,53 @@ class LLMClient:
             "stream":stream
         }
         if stream:
-            await self._stream_response(client, kwargs)
+            async for event in self._stream_response(client, kwargs):
+                yield event
         else:
             event = await self._non_stream_response(client, kwargs)
             yield event
         return 
 
-    async def _stream_response(self, client: AsyncOpenAI, kwargs: dict[str, Any]):
-        pass
+    async def _stream_response(self, client: AsyncOpenAI, kwargs: dict[str, Any])->AsyncGenerator[StreamEvent|None]:
+
+        response = await client.chat.completions.create(**kwargs)
+
+        usage: TokenUsage | None
+        finish_reason: str | None
+
+        async for chunk in response:
+            if hasattr(chunk,"usage") and chunk.usage:
+                usage = TokenUsage(
+                prompt_tokens=chunk.usage.prompt_tokens,
+                completion_tokens=chunk.usage.completion_tokens,
+                total_tokens=chunk.usage.total_tokens,
+                cached_tokens=chunk.usage.prompt_tokens_details.cached_tokens
+            )
+            if not chunk.choices:
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            if choice.finish_reason:
+                finish_reason=choice.finish_reason
+
+            if delta.content:
+                yield StreamEvent(
+                    type=EventType.TEXT_DELTA, 
+                    text_delta=TextDelta(delta.content)
+                )
+        
+        yield StreamEvent(
+            type=EventType.MESSAGE_COMPLETE,
+            finish_reason=finish_reason,
+            usage=usage
+        )
 
     async def _non_stream_response(self, client:AsyncOpenAI, kwargs: dict[str, Any])->StreamEvent:
         response = await client.chat.completions.create(**kwargs)
-        choice = response.choices[0];
-        message = choice.message;
+        choice = response.choices[0]
+        message = choice.message
 
         text_delta = None;
         if message.content:
@@ -67,3 +100,5 @@ class LLMClient:
             finish_reason=choice.finish_reason,
             usage=usage
         )
+
+
