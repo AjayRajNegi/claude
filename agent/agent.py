@@ -11,6 +11,7 @@ class Agent:
 
     async def run(self, message: str):
         yield AgentEvent.agent_start(message)
+        final_response: str | None = None
         # add user message to context
         async for event in self._agentic_loop():
             yield event
